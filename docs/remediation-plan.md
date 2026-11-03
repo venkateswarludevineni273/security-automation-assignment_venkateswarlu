@@ -17,7 +17,7 @@ Everything below is visible in commit `Remediate critical/high findings (Task 3)
 | S1 Password-guess lock could be raced *(new feature)* | Medium | Atomic reservation of each attempt before checking | `app/main.py` |
 | S2 Share password in URL *(new feature)* | Low | `X-Share-Password` header accepted and preferred | `app/main.py` |
 
-**Against the requirement** (at least 3 critical/high fixes, at least one in the Task 1 code): six critical/high findings were fixed (F1-F6; F2 only in part, see R1), and two fixes are in the Task 1 code (S1, S2). Both of those are rated **Medium/Low**: my own review of the share feature found no High-severity flaw, and I have not inflated a rating to make the table look better. If the "at least one" must itself be critical/high, that is the one place this submission only meets the letter of the requirement through honest rating, not through a High in the new code.
+**Against the requirement** (at least 3 critical/high fixes, at least one in the Task 1 code): six critical/high findings were fixed (F1-F6; F2 only in part, see R1). Two fixes are in the Task 1 code (S1, S2), but they are rated Medium and Low. My review of the share feature found no High-severity flaw, and I did not inflate a rating to fit the requirement.
 
 ## 2. What was not fixed, and why
 
