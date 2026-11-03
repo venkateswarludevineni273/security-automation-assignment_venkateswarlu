@@ -1,0 +1,68 @@
+# Security Findings
+
+VulnTracker stores a security team's list of unfixed weaknesses in their own systems. That makes it a high-value target: an attacker who reads it gets a ready-made list of where to attack its owner. I rated severity with that in mind, not by CVSS score alone.
+
+**Severity scale (applied to this application):**
+- **Critical** - an unauthenticated or trivially exploitable path to read or change every customer's data, or to impersonate any user.
+- **High** - exposes one customer's or user's sensitive data to another, or leaks credentials; needs a login or a precondition.
+- **Medium** - weakens a control or helps an attacker once they have a foothold; limited direct impact.
+- **Low** - hardening gaps and nuisance-level issues.
+
+**Where "Where" says:** *starter* = code that came with the assignment; *new feature* = the Shared Report Link code I wrote in Task 1.
+
+## 1. What each scan was (and was not) able to see
+
+| Scan | Tool (why) | Result | What it missed |
+|------|-----------|--------|----------------|
+| SAST | **Bandit** - Python-specific, fast, zero config, JSON output, gates CI cleanly | 4 findings (0 high, 1 medium, 3 low). 3 are real: two hardcoded secrets (F2) and SQL built with string formatting (F3). The 4th (`"bearer"`) is a **false positive**, a token-type label, not a password. | Everything that is *logic* rather than a code pattern: forged tokens (F1), broken access control (F4), logged passwords (F5), leaked stack traces (F8), unsafe CORS (F7). |
+| SCA | **pip-audit** (Python) and **npm audit** (Node) - each uses its ecosystem's official advisory data, so there is no second database to reconcile | pip-audit: **67 vulnerabilities in 8 packages**. npm audit: **11 (1 critical, 5 high, 2 moderate, 3 low)**. | Whether a vulnerable function is actually *reachable*; I did that triage by hand (F6, N2). |
+| Container | **Trivy** - one tool covers OS packages and language libraries in the built image, and runs in CI | See section 5 | - |
+| IaC | **Checkov** - largest Kubernetes/Dockerfile policy set, understands Helm charts | See section 5 | - |
+
+**Takeaway:** the scanners found 3 of the 14 starter-code issues below on their own. Running tools is necessary but nowhere near sufficient; most of the serious problems here only show up when you read the code with the business in mind.
+
+## 2. Findings in the starter code - Python API (`app/`)
+
+| ID | Finding | Detected by | Severity and why | Business impact in VulnTracker | Where | Status |
+|----|---------|-------------|------------------|--------------------------------|-------|--------|
+| F1 | **Login tokens accept the "none" algorithm** (`auth.py`: `algorithms=[ALGORITHM, "none"]`). Anyone can write an unsigned token naming any username and the API accepts it. | Manual. Bandit does not flag it. | **Critical.** No credentials, no skill, one line of work. Defeats authentication completely. | An outsider can act as any user, read every customer's findings, change statuses, delete records, and create share links to exfiltrate reports. | starter | **Fixed** (algorithm pinned; `exp` and `sub` required; regression test) |
+| F2 | **Secrets committed to source**: JWT signing key, database password, admin API key (`config.py`), and the notify service key (`notify/src/config.js`). | Bandit B105 flagged 2 of the 4 (those named "password"/"key=" strings). Missed the admin API key and the notify key. | **Critical.** The repo is public, so the signing key lets anyone mint valid tokens *even after F1 is fixed*. | Total loss of authentication. Removing the lines does not help: they are in git history and must be treated as burned. | starter | **Partly fixed.** App: moved to environment/mounted file, app refuses to start without a key. **Not fixed:** notify key (see N1) and **rotation of all four values is still required** (remediation plan R1). |
+| F3 | **SQL injection in `/scans/search`**: the search text is pasted into a raw SQL string. | Bandit B608 (rated Medium); **I raised it to High** after proving a `UNION` can read the `users` table. | **High.** Needs a login (so not Critical) but exposes password hashes and every user's scans. | Account password hashes and other customers' vulnerability data can be read, possibly modified depending on the database driver. | starter | **Fixed** (bound parameters, `LIKE` wildcards escaped; regression tests) |
+| F4 | **Broken access control (IDOR)**: `GET /scans/{id}` and `/scans/search` return any user's scans, unlike update/delete which check the owner. | Manual. | **High.** Any registered user can read every other user's findings by counting up ids. | A customer sees a competitor's unpatched weaknesses. The most damaging data in the product. | starter | **Fixed** (owner enforced; non-owner gets the same 404 as "missing") |
+| F5 | **Plaintext passwords written to logs** on every login attempt, successful or not (`main.py`). | Manual. | **High.** Logs are widely readable and long-lived, and people mistype passwords from other accounts. | Anyone with log access (support, a log-vendor breach) harvests working credentials. | starter | **Fixed** (password no longer logged; regression test) |
+| F6 | **Vulnerable dependencies** - 67 advisories in `fastapi`, `starlette`, `python-multipart`, `python-jose`, `cryptography`, `anyio`, `pytest`, `ecdsa`. | pip-audit. | **High overall, but triaged individually.** `python-jose` (6, including algorithm confusion) sits on the login path, so **High**. `python-multipart` and most `starlette`/`cryptography` advisories are in form/upload/TLS code this API never calls, so **Low** in practice. `ecdsa` has no fix. | Without triage this looks like 67 emergencies. In reality one library on the auth path mattered; the rest was unused code. | starter | **Fixed**: swapped `python-jose` for PyJWT, removed the three packages the app does not use, upgraded the rest. pip-audit is now **0 vulnerabilities** (`reports/post-remediation/`). |
+| F7 | **CORS reflects any origin with credentials allowed** (`main.py` middleware). | Manual. | **Medium.** Authentication uses a header token, not cookies, so a hostile site cannot ride a browser session today. It becomes High the day cookies are added. | Defeats the browser's main protection between sites. | starter | **Fixed** (opt-in allowlist via `CORS_ALLOWED_ORIGINS`, credentials off) |
+| F8 | **Stack traces and exception text returned to clients** (global handler). | Manual. | **Medium.** No direct breach, but it hands attackers file paths, library versions and query text. | Makes every other attack easier (it is what you would use to tune F3). | starter | **Fixed** (generic 500; detail goes to the server log only) |
+| F9 | **No brute-force protection on login**, no password policy (`"pw"` is accepted), and registration reveals whether a username/email exists. | Manual. | **Medium.** Combined with F5-style credential reuse this is how real accounts get taken over. | Account takeover by guessing; user enumeration. | starter | **Deferred** (R2) |
+| F10 | **Disabled users still work**: `is_active` is stored but never checked at login or on requests. | Manual. | **Medium.** Offboarded staff keep access until their token expires, then can log in again. | Ex-employees retain access to customer vulnerability data. | starter | **Deferred** (R3, small change) |
+| F11 | **Unbounded `limit` on `GET /scans`** and no length limits on text fields. | Manual. | **Low.** Easy to abuse for resource exhaustion, but needs a login. | Slow or unavailable service for one user's very large request. | starter | **Deferred** (R4) |
+| F12 | **Local SQLite database, no encryption at rest, no backups.** | Manual. | **Medium** for a production service. | Data loss on a node failure; data readable from a stolen disk. Also forces single-replica deployment. | starter | **Deferred** (R5) |
+
+## 3. Findings in the Node.js notification service (`notify/`)
+
+The brief says this service needs no changes, so I assessed it and documented the risk rather than editing it.
+
+| ID | Finding | Detected by | Severity and why | Business impact | Where | Status |
+|----|---------|-------------|------------------|-----------------|-------|--------|
+| N1 | **No authentication on `/webhooks` and `/notify`**, anyone who can reach the port can register a webhook; the service then POSTs to **any URL** (server-side request forgery) and **attaches its secret `X-Service-Key` header** (hardcoded in source). | Manual. | **High** while it is internal-only (as designed and as the Helm chart enforces); **Critical** if ever exposed. | An attacker registers a webhook pointing at the cloud metadata address or an internal admin service, and the server calls it for them; or points it at their own server and collects the service key. | starter | **Deferred** (R6) |
+| N2 | **Vulnerable npm dependencies**: 11 advisories, including **1 critical** (`proxy-addr`) and 5 high (`axios`, `express`, `body-parser`, `path-to-regexp`, `follow-redirects`). | npm audit. | **High.** Most are denial-of-service or redirect issues in a service that is not internet-facing; the critical (IP spoofing) only matters if the app trusts proxy headers, which it does not. Rated by reachability rather than by the tool's label. | Service outage or request-forgery weaknesses if the service is later exposed. | starter | **Deferred** (R7), low effort |
+| N3 | **Error handler returns stack traces.** | Manual. | **Medium.** | Information leak. | starter | **Deferred** (R6) |
+| N4 | **Python API to notify service is plain HTTP, unauthenticated.** | Manual. | **Medium.** Scan titles and owner names travel in clear text inside the cluster. | Any workload that can reach the pod can read or inject events. | starter | **Partly mitigated**: NetworkPolicy in the Helm chart restricts who can talk to the API; notify needs its own policy (R6). |
+
+## 4. Findings in the new feature (Shared Report Link)
+
+I reviewed my own Task 1 code the way I would review someone else's, and found two real issues.
+
+| ID | Finding | Detected by | Severity and why | Business impact | Where | Status |
+|----|---------|-------------|------------------|-----------------|-------|--------|
+| S1 | **Password-guess limit could be raced.** The 5-attempt lock read the counter, then wrote it back; several simultaneous requests could all see "0 failures" and each get a guess. | Manual review of my own code. | **Medium.** Needs the link *and* parallel traffic; turns "5 guesses" into "as many as the server can handle". | Weakens the password on a shared link. | new feature | **Fixed.** Attempt is reserved with one atomic database update before the password is checked; test proves the counter never exceeds 5. |
+| S2 | **Password sent in the URL query string** (`?password=`), as the brief specifies. Query strings are recorded in access logs, proxies and browser history. | Manual. | **Low.** Exposure is to people with log access. | A link password can end up in logs. | new feature | **Mitigated.** `X-Share-Password` header is now accepted and preferred; query string kept for brief compatibility (R8). |
+| S3 | **Lockout can be triggered by anyone holding the link**, and there is no way to unlock or revoke a link. Wasting the 5 attempts locks the legitimate viewer out until the owner creates a new link. | Manual. | **Low.** Requires the unguessable link already. | A disgruntled forwardee can block an auditor's access. | new feature | **Deferred** (R8) |
+| S4 | **Shared page shows the *live* scan, not a snapshot**, so later edits to remediation notes become visible to the external viewer for the whole 24 hours. | Manual. | **Low.** Design choice, but surprising. | Internal notes added after sharing could leak. | new feature | **Deferred** (R8); documented in README. |
+| S5 | Expired links stay in the database; no way to list or revoke links. | Manual. | **Low.** | Clutter; no emergency "kill this link" button. | new feature | **Deferred** (R8) |
+
+**Things the feature already does well** (and I would point to in review): 256-bit random token stored only as a SHA-256 hash; password stored with bcrypt; owner-only creation with the same 404 for "not yours" and "does not exist"; identical 404 for unknown and expired tokens; public response omits internal ids; `Cache-Control: no-store`; links die with their scan; `share_url` built from configuration, not from the client-supplied `Host` header.
+
+## 5. Container and infrastructure scans
+
+*(Added after CI produced the reports - see below.)*
