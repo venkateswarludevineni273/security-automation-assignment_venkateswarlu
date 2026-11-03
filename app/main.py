@@ -1,17 +1,18 @@
 import logging
-import traceback
 from datetime import datetime
 from typing import List, Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 import models
 from auth import create_access_token, get_current_user, get_password_hash, verify_password
-from config import NOTIFY_SERVICE_URL, SHARE_BASE_URL
+from config import CORS_ALLOWED_ORIGINS, NOTIFY_SERVICE_URL, SHARE_BASE_URL
 from database import engine, get_db, search_scans_by_query
 from sharing import (
     MAX_FAILED_PASSWORD_ATTEMPTS,
@@ -32,30 +33,24 @@ app = FastAPI(
 )
 
 
-@app.middleware("http")
-async def cors_middleware(request: Request, call_next):
-    response = await call_next(request)
-    origin = request.headers.get("origin")
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
+# Cross-origin access is opt-in via CORS_ALLOWED_ORIGINS. The API authenticates
+# with a bearer header (no cookies), so credentials are never allowed.
+if CORS_ALLOWED_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ALLOWED_ORIGINS,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("Unhandled exception on %s: %s", request.url, exc)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": str(exc),
-            "type": type(exc).__name__,
-            "traceback": traceback.format_exc(),
-            "path": str(request.url),
-        },
-    )
+    # Full detail goes to the server log only; the client gets nothing useful
+    # to an attacker (no stack trace, exception text, or internal paths).
+    logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ---------------------------------------------------------------------------
@@ -176,14 +171,9 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
 
 @app.post("/auth/login")
 def login(payload: UserLogin, db: Session = Depends(get_db)):
-    logger.info("Login attempt — username: %s password: %s", payload.username, payload.password)
     user = db.query(models.User).filter(models.User.username == payload.username).first()
     if not user or not verify_password(payload.password, user.hashed_password):
-        logger.warning(
-            "Failed login — username: '%s' password: '%s'",
-            payload.username,
-            payload.password,
-        )
+        logger.warning("Failed login for username %r", payload.username)
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     token = create_access_token({"sub": user.username})
     return {"access_token": token, "token_type": "bearer"}
@@ -239,7 +229,7 @@ def search_scans(
 ):
     if not q or len(q) < 2:
         raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
-    results = search_scans_by_query(db, q)
+    results = search_scans_by_query(db, q, current_user.id)
     return {"results": results, "count": len(results)}
 
 
@@ -249,7 +239,10 @@ def get_scan(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    scan = db.query(models.ScanResult).filter(models.ScanResult.id == scan_id).first()
+    scan = db.query(models.ScanResult).filter(
+        models.ScanResult.id == scan_id,
+        models.ScanResult.owner_id == current_user.id,
+    ).first()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
     return scan
@@ -344,6 +337,7 @@ def get_shared_scan(
     token: str,
     response: Response,
     password: Optional[str] = None,
+    x_share_password: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
     # Never cache a shared report in browsers or intermediary proxies.
@@ -358,14 +352,39 @@ def get_shared_scan(
         raise HTTPException(status_code=404, detail="Share link not found or expired")
 
     if link.password_hash:
-        if link.failed_attempts >= MAX_FAILED_PASSWORD_ATTEMPTS:
-            raise HTTPException(status_code=429, detail="Too many failed attempts for this link")
-        if not password:
+        # The X-Share-Password header is preferred: query strings end up in
+        # access logs, proxies and browser history. ?password= is still
+        # accepted because the assignment specifies it.
+        supplied = x_share_password or password
+        if not supplied:
             raise HTTPException(status_code=401, detail="Password required")
-        if not verify_password(password, link.password_hash):
-            link.failed_attempts += 1
-            db.commit()
+
+        # Reserve an attempt *atomically* before checking the password. A
+        # read-then-write counter can be raced: N parallel requests all read
+        # "0 failures" and all get a guess. The conditional UPDATE lets at
+        # most MAX_FAILED_PASSWORD_ATTEMPTS requests through in total.
+        reserved = db.execute(
+            update(models.ShareLink)
+            .where(
+                models.ShareLink.id == link.id,
+                models.ShareLink.failed_attempts < MAX_FAILED_PASSWORD_ATTEMPTS,
+            )
+            .values(failed_attempts=models.ShareLink.failed_attempts + 1)
+        ).rowcount
+        db.commit()
+        if reserved == 0:
+            raise HTTPException(status_code=429, detail="Too many failed attempts for this link")
+
+        if not verify_password(supplied, link.password_hash):
             raise HTTPException(status_code=401, detail="Invalid password")
+
+        # Correct password: give the attempt back.
+        db.execute(
+            update(models.ShareLink)
+            .where(models.ShareLink.id == link.id)
+            .values(failed_attempts=0)
+        )
+        db.commit()
 
     return link.scan
 

@@ -17,13 +17,16 @@ def get_db():
         db.close()
 
 
-def search_scans_by_query(db, query: str) -> list:
-    # Raw SQL used here for full-text search flexibility across multiple columns
-    sql = (
-        f"SELECT id, title, description, severity, status, cve_id, "
-        f"affected_component, owner_id, created_at FROM scan_results "
-        f"WHERE title LIKE '%{query}%' OR description LIKE '%{query}%' "
-        f"OR cve_id LIKE '%{query}%'"
+def search_scans_by_query(db, query: str, owner_id: int) -> list:
+    # The user's text is passed as a bound parameter, never concatenated into
+    # the SQL string, and results are limited to the caller's own scans.
+    sql = text(
+        "SELECT id, title, description, severity, status, cve_id, "
+        "affected_component, owner_id, created_at FROM scan_results "
+        "WHERE owner_id = :owner_id AND "
+        "(title LIKE :pattern ESCAPE '\\' OR description LIKE :pattern ESCAPE '\\' "
+        "OR cve_id LIKE :pattern ESCAPE '\\')"
     )
-    result = db.execute(text(sql))
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    result = db.execute(sql, {"owner_id": owner_id, "pattern": f"%{escaped}%"})
     return [dict(row._mapping) for row in result]

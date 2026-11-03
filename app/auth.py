@@ -2,9 +2,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+from jwt import PyJWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -35,9 +36,15 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def decode_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM, "none"])
-        return payload
-    except JWTError as exc:
+        # The algorithm list is pinned to ours. Never accept "none" (unsigned
+        # tokens) or let the token header choose the algorithm.
+        return jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM],
+            options={"require": ["exp", "sub"]},
+        )
+    except PyJWTError as exc:
         logger.debug("JWT decode error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
