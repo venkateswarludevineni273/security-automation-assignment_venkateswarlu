@@ -4,7 +4,7 @@
 # Pinned to an exact Python patch release on Debian slim. For fully
 # reproducible builds, also pin the digest (python:<tag>@sha256:...);
 # Dependabot (see .github/dependabot.yml) proposes tag/digest bumps.
-FROM python:3.11.14-slim-bookworm AS builder
+FROM python:3.15.0-slim-bookworm AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # ---- runtime stage: only the venv and the app, no build tooling ------------
-FROM python:3.11.14-slim-bookworm AS runtime
+FROM python:3.15.0-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
