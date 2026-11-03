@@ -126,14 +126,14 @@ jobs:
           curl -fsS http://localhost:8000/health
           [ "$status" = "healthy" ]
       - name: Trivy image scan (JSON report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: vulntracker-api:ci
           format: json
           output: container.trivy.json
           exit-code: "0"
       - name: Fail on CRITICAL vulnerabilities that have a fix
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: vulntracker-api:ci
           format: table

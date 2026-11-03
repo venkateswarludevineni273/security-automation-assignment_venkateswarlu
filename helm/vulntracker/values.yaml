@@ -3,7 +3,7 @@ image:
   repository: ghcr.io/venkateswarludevineni273/vulntracker-api
   tag: ""            # defaults to .Chart.AppVersion
   digest: ""         # takes precedence over tag when set
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 # SQLite is a single-writer file database, so this must stay at 1 until the
 # app moves to a networked database (see docs/remediation-plan.md).
