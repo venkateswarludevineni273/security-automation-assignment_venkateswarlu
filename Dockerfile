@@ -23,6 +23,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}" \
     DATABASE_URL="sqlite:////data/vulntracker.db"
 
+# Pull in Debian security patches released since the base image was built
+# (e.g. openssl, gnutls, perl-base). The apt cache is removed in the same layer
+# so it does not bloat the image.
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # Unprivileged user with a fixed numeric UID/GID (Kubernetes runAsNonRoot can
 # verify a numeric ID, not a name). /data is the only writable path.
 RUN groupadd --system --gid 10001 app \
