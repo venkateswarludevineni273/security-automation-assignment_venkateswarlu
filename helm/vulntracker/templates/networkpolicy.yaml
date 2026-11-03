@@ -1,0 +1,43 @@
+# Default-deny for this pod, then allow only what the service needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vulntracker.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vulntracker.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vulntracker.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Only the ingress controller may connect, and only to the app port.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # DNS only...
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dnsNamespace }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.notify.enabled }}
+    # ...plus the notification service, when enabled.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.notify.podLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.notify.port }}
+    {{- end }}

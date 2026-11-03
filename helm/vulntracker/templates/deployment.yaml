@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vulntracker.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vulntracker.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # ReadWriteOnce volume + SQLite: stop the old pod before starting the new one.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vulntracker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vulntracker.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "vulntracker.name" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "vulntracker.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            # Paths and non-secret settings only. The signing key itself is a
+            # mounted file, never an environment variable.
+            - name: SECRET_KEY_FILE
+              value: /var/run/secrets/vulntracker/secret-key
+            - name: SHARE_BASE_URL
+              value: {{ .Values.shareBaseUrl | quote }}
+            - name: CORS_ALLOWED_ORIGINS
+              value: {{ .Values.corsAllowedOrigins | quote }}
+            {{- if .Values.notify.enabled }}
+            - name: NOTIFY_SERVICE_URL
+              value: {{ .Values.notify.url | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: signing-key
+              mountPath: /var/run/secrets/vulntracker
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: {{ include "vulntracker.name" . }}-signing-key
+            defaultMode: 0400
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "vulntracker.name" . }}-data
+          {{- else }}
+          emptyDir:
+            sizeLimit: 256Mi
+          {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -5,61 +5,209 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
+        run: pip install -r requirements-dev.txt
       - name: Run tests
         run: pytest tests/ -v
 
   test-notify:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install dependencies
         run: npm install
         working-directory: notify
-
       - name: Run tests
         run: npm test
         working-directory: notify
 
-  # TODO (candidates): Add the following security scanning jobs.
-  # Tool selection is your decision — document your choices in findings.md.
-  #
-  # sast:
-  #   Static Application Security Testing against app/ source code
-  #   Upload JSON report as a build artifact named sast.<tool>.json
-  #   Build should fail on critical findings
-  #
-  # sca:
-  #   Dependency / Software Composition Analysis against requirements.txt
-  #   Upload JSON report as a build artifact named sca.<tool>.json
-  #   Build should fail on critical or high severity CVEs
-  #
-  # container-scan:
-  #   Build the Docker image, then scan it for vulnerabilities and misconfigurations
-  #   Upload JSON report as a build artifact named container.<tool>.json
-  #
-  # iac-scan:
-  #   Scan the Helm chart or Terraform configuration for security misconfigurations
-  #   Upload JSON report as a build artifact named iac.<tool>.json
+  # ---------------------------------------------------------------------------
+  # Security scanning. Each job uploads its raw JSON report as an artifact.
+  # ---------------------------------------------------------------------------
+
+  sast:
+    # Bandit (Python-specific static analysis) fails the build on HIGH severity.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run Bandit
+        run: |
+          pip install bandit==1.9.4
+          mkdir -p out
+          bandit -r app -f json -o out/sast.bandit.json || true
+      - name: Fail on HIGH severity findings
+        run: |
+          python - <<'PY'
+          import json, sys
+          results = json.load(open("out/sast.bandit.json"))["results"]
+          high = [r for r in results if r["issue_severity"] == "HIGH"]
+          print(f"{len(results)} findings, {len(high)} high")
+          for r in high:
+              print(f'  {r["test_id"]} {r["filename"]}:{r["line_number"]} {r["issue_text"]}')
+          sys.exit(1 if high else 0)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-sast
+          path: out/sast.bandit.json
+
+  sca:
+    # pip-audit checks the pinned Python dependencies against the PyPI
+    # advisory database and fails the build if any known vulnerability remains.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run pip-audit
+        run: |
+          pip install pip-audit==2.10.1
+          mkdir -p out
+          pip-audit -r requirements.txt -f json -o out/sca.pip-audit.json
+      - name: npm audit for notify/ (report only; see docs/remediation-plan.md)
+        if: always()
+        working-directory: notify
+        run: npm audit --json > ../out/sca.npm-audit.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-sca
+          path: out/*.json
+
+  container-scan:
+    # Build the real image, prove it runs as non-root and is reachable, then
+    # scan it with Trivy (OS packages + Python libraries).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t vulntracker-api:ci .
+      - name: Image runs as a non-root user
+        run: |
+          uid=$(docker run --rm --entrypoint id vulntracker-api:ci -u)
+          echo "uid=$uid"
+          test "$uid" != "0"
+      - name: Image refuses to start without a secret
+        run: |
+          if docker run --rm vulntracker-api:ci; then echo "started without SECRET_KEY"; exit 1; fi
+      - name: Container starts, is healthy and reachable
+        run: |
+          docker run -d --name vt -p 8000:8000 \
+            -e SECRET_KEY="$(openssl rand -hex 32)" vulntracker-api:ci
+          for i in $(seq 1 20); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' vt)
+            [ "$status" = "healthy" ] && break
+            sleep 3
+          done
+          echo "health: $status"
+          curl -fsS http://localhost:8000/health
+          [ "$status" = "healthy" ]
+      - name: Trivy image scan (JSON report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: vulntracker-api:ci
+          format: json
+          output: container.trivy.json
+          exit-code: "0"
+      - name: Fail on CRITICAL vulnerabilities that have a fix
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: vulntracker-api:ci
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-container
+          path: container.trivy.json
+
+  iac-scan:
+    # Lint + render the Helm chart, then scan the rendered manifests and the
+    # Dockerfile with Checkov.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: helm lint and template
+        run: |
+          helm lint helm/vulntracker
+          helm template vt helm/vulntracker > /dev/null
+      - name: Checkov (Helm chart + Dockerfile)
+        run: |
+          pip install checkov==3.4.3
+          checkov -d . --framework helm,dockerfile --quiet --compact \
+            -o json > iac.checkov.json || true
+          python - <<'PY'
+          import json
+          data = json.load(open("iac.checkov.json"))
+          runs = data if isinstance(data, list) else [data]
+          for r in runs:
+              s = r["summary"]
+              print(r["check_type"], "passed", s["passed"], "failed", s["failed"])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: report-iac
+          path: iac.checkov.json
+
+  publish-reports:
+    # Commits the container and IaC scan reports into reports/ the first time
+    # they are produced on main (or on a manual run), so the repo carries the
+    # raw output the assignment asks for. [skip ci] prevents a loop.
+    needs: [container-scan, iac-scan]
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: report-*
+          path: incoming
+          merge-multiple: true
+      - name: Commit reports
+        run: |
+          mkdir -p reports
+          for f in container.trivy.json iac.checkov.json; do
+            if [ -f "incoming/$f" ] && { [ ! -f "reports/$f" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; }; then
+              cp "incoming/$f" "reports/$f"
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports
+          if git diff --cached --quiet; then echo "no report changes"; exit 0; fi
+          git commit -m "CI: add container and IaC scan reports [skip ci]"
+          git push

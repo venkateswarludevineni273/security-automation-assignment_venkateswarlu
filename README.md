@@ -236,3 +236,69 @@ Good luck. If anything in the brief is ambiguous, document your assumption and p
 - Deleting a scan deletes its links.
 
 **Known limitations (prototype):** the password travels in a query string, so it can appear in access logs and browser history (the brief specifies this); there is no per-IP rate limiting; expired rows are not purged; links cannot be listed or revoked individually.
+
+---
+
+## Configuration (environment variables)
+
+No secrets live in the repository. The API **refuses to start** without a signing key.
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `SECRET_KEY` or `SECRET_KEY_FILE` | **yes** | - | JWT signing key, at least 32 chars. `_FILE` reads it from a mounted file (preferred with a secrets manager). Generate: `openssl rand -hex 32` |
+| `DATABASE_URL` | no | `sqlite:///./vulntracker.db` | SQLAlchemy URL (the image uses `sqlite:////data/vulntracker.db`) |
+| `SHARE_BASE_URL` | no | `http://localhost:8000` | Base URL used to build share links |
+| `CORS_ALLOWED_ORIGINS` | no | *(none)* | Comma-separated browser origins allowed to call the API |
+| `NOTIFY_SERVICE_URL` | no | `http://localhost:3001` | Notification service |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | no | `30` | Login token lifetime |
+
+Local development and tests (tests set their own throwaway key):
+
+```bash
+pip install -r requirements-dev.txt      # runtime deps + pytest
+pytest tests/ -v
+export SECRET_KEY=$(openssl rand -hex 32)
+cd app && uvicorn main:app --reload
+```
+
+## Docker (Task 4)
+
+The image is a multi-stage build on a pinned `python:3.11.14-slim-bookworm`, runs as non-root (UID 10001), has a `HEALTHCHECK`, and contains no secrets.
+
+```bash
+# build (from the repo root)
+docker build -t vulntracker-api:latest .
+
+# run - the secret is supplied at run time, never baked into the image
+docker run --rm -p 8000:8000 \
+  -e SECRET_KEY="$(openssl rand -hex 32)" \
+  -v vulntracker-data:/data \
+  vulntracker-api:latest
+
+curl http://localhost:8000/health        # {"status":"ok","service":"vulntracker-api"}
+docker ps                                 # STATUS shows (healthy) after ~15s
+```
+
+To check the hardening yourself: `docker run --rm --entrypoint id vulntracker-api:latest` prints a non-zero UID, and running the image without `SECRET_KEY` exits immediately with an explanatory error.
+
+## Kubernetes / Helm (Task 4)
+
+`helm/vulntracker/` deploys the API with:
+
+- **Secrets from a secrets manager:** an `ExternalSecret` (External Secrets Operator) pulls the signing key from AWS Secrets Manager / Vault / GCP Secret Manager and it is mounted as a read-only **file** (`SECRET_KEY_FILE`), not an environment variable. No secret value is in the chart.
+- **Restricted ingress:** a `NetworkPolicy` allows traffic only from the ingress controller namespace on port 8000, and egress only to DNS (plus the notify service if enabled). The Service is `ClusterIP`; the optional Ingress requires TLS.
+- **Limits and security contexts:** CPU/memory/ephemeral-storage requests and limits; non-root UID 10001, read-only root filesystem, all capabilities dropped, no privilege escalation, `RuntimeDefault` seccomp, no service-account token mounted.
+
+```bash
+helm lint helm/vulntracker
+helm template vt helm/vulntracker                       # render and inspect
+helm install vt helm/vulntracker -n vulntracker --create-namespace \
+  --set image.repository=<registry>/vulntracker-api --set image.tag=<tag> \
+  --set shareBaseUrl=https://vulntracker.example.com
+```
+
+Prerequisites: External Secrets Operator with a `ClusterSecretStore` named `vulntracker-secret-store` (configurable in `values.yaml`) that can read `vulntracker/prod/jwt-signing-key`. The replica count stays at 1 because SQLite is a single-writer database (see `docs/remediation-plan.md`).
+
+## Security scanning in CI
+
+`.github/workflows/ci.yml` runs SAST (Bandit), SCA (pip-audit, npm audit), container scan (Trivy, after building the image and smoke-testing it) and IaC scan (Checkov on the Helm chart and Dockerfile) on every push. Reports in `reports/` are the raw tool output; `reports/post-remediation/` is the SAST/SCA output after the Task 3 fixes. See `docs/findings.md`.

@@ -1,0 +1,86 @@
+# Pin the image by digest in real environments: image.digest: sha256:...
+image:
+  repository: ghcr.io/venkateswarludevineni273/vulntracker-api
+  tag: ""            # defaults to .Chart.AppVersion
+  digest: ""         # takes precedence over tag when set
+  pullPolicy: IfNotPresent
+
+# SQLite is a single-writer file database, so this must stay at 1 until the
+# app moves to a networked database (see docs/remediation-plan.md).
+replicaCount: 1
+
+nameOverride: ""
+
+service:
+  port: 8000
+
+# Public base URL used to build share links (SHARE_BASE_URL).
+shareBaseUrl: "https://vulntracker.example.com"
+
+# Browser origins allowed to call the API. Empty = no cross-origin access.
+corsAllowedOrigins: ""
+
+# Optional: in-cluster notification service. When disabled the API simply
+# logs that it could not notify and carries on.
+notify:
+  enabled: false
+  url: "http://vulntracker-notify:3001"
+  podLabels:
+    app.kubernetes.io/name: vulntracker-notify
+  port: 3001
+
+# Secrets come from an external secrets manager (AWS Secrets Manager, Vault,
+# GCP Secret Manager, ...) via the External Secrets Operator. Nothing secret is
+# stored in this chart. The value is mounted as a FILE (not an env var) and the
+# app reads it through SECRET_KEY_FILE, so it does not show up in `kubectl
+# describe`, process environments, or crash dumps.
+secrets:
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: vulntracker-secret-store
+  refreshInterval: 1h
+  signingKey:
+    remoteKey: vulntracker/prod/jwt-signing-key   # path in the secrets manager
+    # property: value                             # optional JSON property
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+
+ingress:
+  enabled: false
+  className: nginx
+  host: vulntracker.example.com
+  tlsSecretName: vulntracker-tls
+  annotations: {}
+
+# Only this namespace (the ingress controller) may reach the pod.
+networkPolicy:
+  ingressNamespace: ingress-nginx
+  dnsNamespace: kube-system
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+    ephemeral-storage: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 10001
+  capabilities:
+    drop: ["ALL"]
