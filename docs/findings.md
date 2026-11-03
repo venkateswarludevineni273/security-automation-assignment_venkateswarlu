@@ -65,4 +65,26 @@ I reviewed my own Task 1 code the way I would review someone else's, and found t
 
 ## 5. Container and infrastructure scans
 
-*(Added after CI produced the reports - see below.)*
+Both scans run in CI on every push (`reports/container.trivy.json`, `reports/iac.checkov.json`). The numbers below are from the final run on `main`, after the image fix described in C1.
+
+### Container image - Trivy (`reports/container.trivy.json`)
+
+| ID | Finding | Severity (my assessment) | Business impact here | Where | Status |
+|----|---------|--------------------------|----------------------|-------|--------|
+| C1 | Base image shipped with 7 fixable CRITICAL OS-package CVEs (openssl, gnutls, perl-base). The first CI run failed its gate because of them. | High | TLS and system libraries underpin every connection the container makes. The patches already existed; the image was just built from older packages. | Starter base image, my Dockerfile | **Fixed**: runtime stage now runs `apt-get upgrade`. Re-scan: 0 fixable CRITICAL. |
+| C2 | 2 CRITICAL OS-package CVEs with no Debian fix: `libsqlite3-0` (CVE-2025-7458) and `zlib1g` (CVE-2023-45853) | Medium | The zlib issue is in its MiniZip component, which this app never calls. The SQLite issue is reported as triggered through crafted SQL text; after the SQL-injection fix (F4) no user-controlled SQL reaches the database, so practical exposure is low. | Base OS | Open. Nothing to apply today. CI fails the build the day a fix is published (`ignore-unfixed: true` gate). |
+| C3 | 36 HIGH and about 240 MEDIUM/LOW OS-package CVEs, none with a fix available | Low to Medium | Mostly in packages the app never executes. Raw count overstates risk. | Base OS | Open. A slimmer base (distroless) would cut this sharply; see remediation plan. |
+| C4 | 5 HIGH CVEs in Python packaging tools inside the image (`wheel`, `jaraco.context`, vendored in `setuptools`) | Low | Build-time tooling, not imported by the app at runtime; exploiting them needs the attacker to already run commands or supply a malicious package. | Starter base image | Open. Fixable by removing or upgrading the packaging tools in the runtime stage (about 30 minutes, needs a CI iteration to confirm). |
+
+### Dockerfile and Helm chart - Checkov (`reports/iac.checkov.json`)
+
+Dockerfile: 92 checks passed, 0 failed. Helm chart: 88 passed, 4 failed.
+
+| ID | Finding | Severity | Judgment | Status |
+|----|---------|----------|----------|--------|
+| I1 | CKV_K8S_21 "default namespace should not be used" (3 objects) | Low | Rendering artefact: the templates deliberately do not hard-code a namespace, so Checkov renders them into `default`. The chart is installed with `-n <namespace> --create-namespace` (see README). | Accepted, not a real misconfiguration |
+| I2 | CKV_K8S_43 "image should use a digest" | Low | The image is pinned to an exact version tag, not a content digest, so a re-pushed tag could change what runs. Pinning needs the digest of a built image, which exists only after the release pipeline publishes it. | Open; planned for the release pipeline |
+
+**What I deliberately did well in the deployment** (worth pointing at in an interview): non-root numeric UID, read-only root filesystem, all Linux capabilities dropped, no privilege escalation, resource requests and limits, ingress NetworkPolicy limited to the ingress controller, and the signing key synced from a secrets manager by External Secrets and mounted as a file (`SECRET_KEY_FILE`), not set as an environment variable or written in the manifests.
+
+**What I could not verify locally:** this workspace has no Docker daemon and cannot reach image registries, so I did not build or run the image myself. The build, "runs as non-root", "refuses to start without a secret" and "healthy and reachable" checks run in CI (job `container-scan`), and that job passed.
