@@ -14,7 +14,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -27,7 +27,7 @@ jobs:
   test-notify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -47,7 +47,7 @@ jobs:
     # Bandit (Python-specific static analysis) fails the build on HIGH severity.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -78,7 +78,7 @@ jobs:
     # advisory database and fails the build if any known vulnerability remains.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -102,7 +102,7 @@ jobs:
     # scan it with Trivy (OS packages + Python libraries).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build image
         run: docker build -t vulntracker-api:ci .
       - name: Image runs as a non-root user
@@ -151,7 +151,7 @@ jobs:
     # Dockerfile with Checkov.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.4
@@ -191,7 +191,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           pattern: report-*
