@@ -35,3 +35,24 @@ class ScanResult(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     owner = relationship("User", back_populates="scans")
+    # Deleting a scan must also revoke every share link that points at it.
+    share_links = relationship(
+        "ShareLink", back_populates="scan", cascade="all, delete-orphan"
+    )
+
+
+class ShareLink(Base):
+    __tablename__ = "share_links"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # SHA-256 digest of the token; the raw token is never stored.
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)
+    scan_id = Column(Integer, ForeignKey("scan_results.id"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # bcrypt hash, or NULL when the link is not password protected.
+    password_hash = Column(String(200), nullable=True)
+    failed_attempts = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    scan = relationship("ScanResult", back_populates="share_links")

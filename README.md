@@ -215,3 +215,24 @@ We are not grading on volume. We are grading on judgment.
 - **Communication**: Would a non-technical executive understand your summary?
 
 Good luck. If anything in the brief is ambiguous, document your assumption and proceed.
+
+---
+
+## Shared Report Link (Task 1)
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| POST | `/scans/{scan_id}/share` | Bearer token (scan owner only) | Optional JSON body `{"password": "..."}` (8-72 chars). Returns `{"share_url": "..."}` |
+| GET | `/share/{token}` | None | Add `?password=...` if the link is protected |
+
+**`share_url` base:** built from the `SHARE_BASE_URL` environment variable, defaulting to `http://localhost:8000`. It is deliberately *not* taken from the request's `Host` header, because that header is client-controlled (host-header injection).
+
+**Security properties**
+- Token: 256 bits from `secrets.token_urlsafe(32)`; only its SHA-256 digest is stored, so a database leak does not leak usable links.
+- Password: optional, stored as a bcrypt hash. After 5 wrong attempts the link is locked.
+- Expiry: 24 hours, enforced server-side. Unknown and expired tokens return the same 404.
+- Authorisation: only the scan's owner can create a link; non-owners get the same 404 as a missing scan.
+- Public response omits `owner_id` and the internal `id`, and sends `Cache-Control: no-store`.
+- Deleting a scan deletes its links.
+
+**Known limitations (prototype):** the password travels in a query string, so it can appear in access logs and browser history (the brief specifies this); there is no per-IP rate limiting; expired rows are not purged; links cannot be listed or revoked individually.

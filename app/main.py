@@ -4,15 +4,21 @@ from datetime import datetime
 from typing import List, Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 import models
 from auth import create_access_token, get_current_user, get_password_hash, verify_password
-from config import NOTIFY_SERVICE_URL
+from config import NOTIFY_SERVICE_URL, SHARE_BASE_URL
 from database import engine, get_db, search_scans_by_query
+from sharing import (
+    MAX_FAILED_PASSWORD_ATTEMPTS,
+    SHARE_LINK_TTL,
+    generate_share_token,
+    hash_share_token,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -101,6 +107,31 @@ class ScanOut(BaseModel):
     affected_component: str
     remediation_notes: Optional[str]
     owner_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ShareCreate(BaseModel):
+    # bcrypt only uses the first 72 bytes, so cap the length instead of
+    # silently truncating; the minimum blocks trivially guessable passwords.
+    password: Optional[str] = Field(default=None, min_length=8, max_length=72)
+
+
+class ShareOut(BaseModel):
+    share_url: str
+
+
+class SharedScanOut(BaseModel):
+    """Public view of a scan. Deliberately omits owner_id and other internals."""
+    title: str
+    description: Optional[str]
+    severity: str
+    status: str
+    cve_id: Optional[str]
+    affected_component: str
+    remediation_notes: Optional[str]
     created_at: datetime
 
     class Config:
@@ -270,6 +301,73 @@ def delete_scan(
         raise HTTPException(status_code=404, detail="Scan not found")
     db.delete(scan)
     db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Shared report links
+# ---------------------------------------------------------------------------
+
+@app.post("/scans/{scan_id}/share", response_model=ShareOut, status_code=201)
+def create_share_link(
+    scan_id: int,
+    payload: Optional[ShareCreate] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # Only the scan's owner may share it. Filtering on owner_id (rather than
+    # fetching by id and comparing) means a non-owner gets the same 404 as a
+    # missing scan, so scan ids cannot be enumerated.
+    scan = db.query(models.ScanResult).filter(
+        models.ScanResult.id == scan_id,
+        models.ScanResult.owner_id == current_user.id,
+    ).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    token = generate_share_token()
+    password = payload.password if payload else None
+    link = models.ShareLink(
+        token_hash=hash_share_token(token),
+        scan_id=scan.id,
+        created_by=current_user.id,
+        password_hash=get_password_hash(password) if password else None,
+        expires_at=datetime.utcnow() + SHARE_LINK_TTL,
+    )
+    db.add(link)
+    db.commit()
+    # The raw token exists only in this response; it cannot be recovered later.
+    return {"share_url": f"{SHARE_BASE_URL}/share/{token}"}
+
+
+@app.get("/share/{token}", response_model=SharedScanOut)
+def get_shared_scan(
+    token: str,
+    response: Response,
+    password: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    # Never cache a shared report in browsers or intermediary proxies.
+    response.headers["Cache-Control"] = "no-store"
+
+    link = db.query(models.ShareLink).filter(
+        models.ShareLink.token_hash == hash_share_token(token)
+    ).first()
+    # Unknown, malformed and expired tokens all return the same 404 so the
+    # response does not reveal whether a token ever existed.
+    if not link or link.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=404, detail="Share link not found or expired")
+
+    if link.password_hash:
+        if link.failed_attempts >= MAX_FAILED_PASSWORD_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many failed attempts for this link")
+        if not password:
+            raise HTTPException(status_code=401, detail="Password required")
+        if not verify_password(password, link.password_hash):
+            link.failed_attempts += 1
+            db.commit()
+            raise HTTPException(status_code=401, detail="Invalid password")
+
+    return link.scan
 
 
 # ---------------------------------------------------------------------------
