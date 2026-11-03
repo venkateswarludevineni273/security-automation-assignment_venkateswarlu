@@ -67,7 +67,7 @@ jobs:
               print(f'  {r["test_id"]} {r["filename"]}:{r["line_number"]} {r["issue_text"]}')
           sys.exit(1 if high else 0)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-sast
@@ -91,7 +91,7 @@ jobs:
         if: always()
         working-directory: notify
         run: npm audit --json > ../out/sca.npm-audit.json || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-sca
@@ -140,7 +140,7 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-container
@@ -175,7 +175,7 @@ jobs:
               s = r["summary"]
               print(r["check_type"], "passed", s["passed"], "failed", s["failed"])
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: report-iac
