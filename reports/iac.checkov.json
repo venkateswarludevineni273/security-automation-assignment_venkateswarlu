@@ -5,7 +5,7 @@
             "failed_checks": []
         },
         "summary": {
-            "passed": 92,
+            "passed": 109,
             "failed": 0,
             "skipped": 0,
             "parsing_errors": 0,
@@ -27,7 +27,7 @@
                     },
                     "code_block": null,
                     "file_path": "/helm/vulntracker/templates/service.yaml",
-                    "file_abs_path": "/tmp/tmp7wc7lw12/helm/vulntracker/templates/service.yaml",
+                    "file_abs_path": "/tmp/tmpfp7zcd_d/helm/vulntracker/templates/service.yaml",
                     "repo_file_path": "/helm/vulntracker/templates/service.yaml",
                     "file_line_range": [
                         3,
@@ -63,7 +63,7 @@
                     },
                     "code_block": null,
                     "file_path": "/helm/vulntracker/templates/serviceaccount.yaml",
-                    "file_abs_path": "/tmp/tmp7wc7lw12/helm/vulntracker/templates/serviceaccount.yaml",
+                    "file_abs_path": "/tmp/tmpfp7zcd_d/helm/vulntracker/templates/serviceaccount.yaml",
                     "repo_file_path": "/helm/vulntracker/templates/serviceaccount.yaml",
                     "file_line_range": [
                         3,
@@ -99,7 +99,7 @@
                     },
                     "code_block": null,
                     "file_path": "/helm/vulntracker/templates/deployment.yaml",
-                    "file_abs_path": "/tmp/tmp7wc7lw12/helm/vulntracker/templates/deployment.yaml",
+                    "file_abs_path": "/tmp/tmpfp7zcd_d/helm/vulntracker/templates/deployment.yaml",
                     "repo_file_path": "/helm/vulntracker/templates/deployment.yaml",
                     "file_line_range": [
                         3,
@@ -137,7 +137,7 @@
                     },
                     "code_block": null,
                     "file_path": "/helm/vulntracker/templates/deployment.yaml",
-                    "file_abs_path": "/tmp/tmp7wc7lw12/helm/vulntracker/templates/deployment.yaml",
+                    "file_abs_path": "/tmp/tmpfp7zcd_d/helm/vulntracker/templates/deployment.yaml",
                     "repo_file_path": "/helm/vulntracker/templates/deployment.yaml",
                     "file_line_range": [
                         3,
