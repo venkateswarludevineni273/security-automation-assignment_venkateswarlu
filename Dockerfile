@@ -4,7 +4,7 @@
 # Pinned to an exact Python patch release on Debian slim. For fully
 # reproducible builds, also pin the digest (python:<tag>@sha256:...);
 # Dependabot (see .github/dependabot.yml) proposes tag/digest bumps.
-FROM python:3.11.14-slim-bookworm AS builder
+FROM python:3.11.18-slim-bookworm AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -20,7 +20,7 @@ RUN pip install -r requirements.txt \
  && pip uninstall -y pip setuptools wheel
 
 # ---- runtime stage: only the venv and the app, no build tooling ------------
-FROM python:3.11.14-slim-bookworm AS runtime
+FROM python:3.11.18-slim-bookworm AS runtime
 
 # Links the published image to this repository on GitHub.
 LABEL org.opencontainers.image.source="https://github.com/venkateswarludevineni273/security-automation-assignment_venkateswarlu"
