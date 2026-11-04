@@ -31,6 +31,9 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 NOTIFY_SERVICE_URL = os.environ.get("NOTIFY_SERVICE_URL", "http://localhost:3001")
+# Bearer token the notification service requires on every call (optional here:
+# if unset, no Authorization header is sent and the notify service will refuse).
+NOTIFY_API_TOKEN = _read_setting("NOTIFY_API_TOKEN")
 
 # Base URL used to build share links. Deliberately NOT derived from the
 # request's Host header: that header is client-controlled, so using it would

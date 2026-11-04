@@ -1,6 +1,6 @@
 {
   "errors": [],
-  "generated_at": "2026-11-03T11:00:24Z",
+  "generated_at": "2026-11-04T00:55:40Z",
   "metrics": {
     "_totals": {
       "CONFIDENCE.HIGH": 0,
@@ -11,7 +11,7 @@
       "SEVERITY.LOW": 1,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 456,
+      "loc": 555,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -50,7 +50,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 27,
+      "loc": 28,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -67,6 +67,19 @@
       "nosec": 0,
       "skipped_tests": 0
     },
+    "app/log_redaction.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 19,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
     "app/main.py": {
       "CONFIDENCE.HIGH": 0,
       "CONFIDENCE.LOW": 0,
@@ -76,7 +89,7 @@
       "SEVERITY.LOW": 1,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 292,
+      "loc": 370,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -89,7 +102,7 @@
       "SEVERITY.LOW": 0,
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 41,
+      "loc": 42,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -109,7 +122,7 @@
   },
   "results": [
     {
-      "code": "178     token = create_access_token({\"sub\": user.username})\n179     return {\"access_token\": token, \"token_type\": \"bearer\"}\n180 \n",
+      "code": "209     token = create_access_token({\"sub\": user.username})\n210     return {\"access_token\": token, \"token_type\": \"bearer\"}\n211 \n",
       "col_offset": 35,
       "end_col_offset": 47,
       "filename": "app/main.py",
@@ -120,9 +133,9 @@
       },
       "issue_severity": "LOW",
       "issue_text": "Possible hardcoded password: 'bearer'",
-      "line_number": 179,
+      "line_number": 210,
       "line_range": [
-        179
+        210
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b105_hardcoded_password_string.html",
       "test_id": "B105",

@@ -52,6 +52,9 @@ class ShareLink(Base):
     # bcrypt hash, or NULL when the link is not password protected.
     password_hash = Column(String(200), nullable=True)
     failed_attempts = Column(Integer, default=0, nullable=False)
+    # JSON copy of the public view of the scan, taken when the link is created,
+    # so later edits to the scan (e.g. internal notes) never reach the viewer.
+    snapshot = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
 

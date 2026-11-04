@@ -63,28 +63,28 @@ def test_register_user():
     resp = client.post("/auth/register", json={
         "username": "bob",
         "email": "bob@example.com",
-        "password": "secret",
+        "password": "secret-pass-1",
     })
     assert resp.status_code == 201
     assert resp.json()["username"] == "bob"
 
 
 def test_register_duplicate_username():
-    payload = {"username": "bob", "email": "bob@example.com", "password": "secret"}
+    payload = {"username": "bob", "email": "bob@example.com", "password": "secret-pass-1"}
     client.post("/auth/register", json=payload)
     resp = client.post("/auth/register", json={**payload, "email": "bob2@example.com"})
     assert resp.status_code == 400
 
 
 def test_login_success():
-    client.post("/auth/register", json={"username": "alice", "email": "alice@example.com", "password": "pw"})
-    resp = client.post("/auth/login", json={"username": "alice", "password": "pw"})
+    client.post("/auth/register", json={"username": "alice", "email": "alice@example.com", "password": "password-1234"})
+    resp = client.post("/auth/login", json={"username": "alice", "password": "password-1234"})
     assert resp.status_code == 200
     assert "access_token" in resp.json()
 
 
 def test_login_wrong_password():
-    client.post("/auth/register", json={"username": "alice", "email": "alice@example.com", "password": "pw"})
+    client.post("/auth/register", json={"username": "alice", "email": "alice@example.com", "password": "password-1234"})
     resp = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
     assert resp.status_code == 401
 

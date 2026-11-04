@@ -62,6 +62,7 @@ def get_current_user(
     if not username:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
     user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
+    # A disabled account must stop working immediately, not when its token expires.
+    if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user

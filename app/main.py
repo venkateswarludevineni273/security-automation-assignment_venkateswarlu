@@ -1,9 +1,10 @@
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -12,8 +13,9 @@ from sqlalchemy.orm import Session
 
 import models
 from auth import create_access_token, get_current_user, get_password_hash, verify_password
-from config import CORS_ALLOWED_ORIGINS, NOTIFY_SERVICE_URL, SHARE_BASE_URL
+from config import CORS_ALLOWED_ORIGINS, NOTIFY_API_TOKEN, NOTIFY_SERVICE_URL, SHARE_BASE_URL
 from database import engine, get_db, search_scans_by_query
+from log_redaction import RedactShareSecrets
 from sharing import (
     MAX_FAILED_PASSWORD_ATTEMPTS,
     SHARE_LINK_TTL,
@@ -23,6 +25,7 @@ from sharing import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn.access").addFilter(RedactShareSecrets())
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -45,6 +48,17 @@ if CORS_ALLOWED_ORIGINS:
     )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Only meaningful over HTTPS (the ingress terminates TLS); harmless otherwise.
+    response.headers.setdefault("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+    return response
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     # Full detail goes to the server log only; the client gets nothing useful
@@ -58,9 +72,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 
 class UserRegister(BaseModel):
-    username: str
-    email: str
-    password: str
+    username: str = Field(min_length=3, max_length=50)
+    email: str = Field(min_length=3, max_length=100)
+    # bcrypt only uses the first 72 bytes, so cap the length rather than
+    # silently truncating; 10+ characters blocks the weakest passwords.
+    password: str = Field(min_length=10, max_length=72)
 
 
 class UserLogin(BaseModel):
@@ -79,17 +95,17 @@ class UserOut(BaseModel):
 
 
 class ScanCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
+    title: str = Field(min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=10000)
     severity: str = "medium"
-    cve_id: Optional[str] = None
-    affected_component: str
-    remediation_notes: Optional[str] = None
+    cve_id: Optional[str] = Field(default=None, max_length=30)
+    affected_component: str = Field(min_length=1, max_length=200)
+    remediation_notes: Optional[str] = Field(default=None, max_length=10000)
 
 
 class ScanUpdate(BaseModel):
     status: Optional[str] = None
-    remediation_notes: Optional[str] = None
+    remediation_notes: Optional[str] = Field(default=None, max_length=10000)
 
 
 class ScanOut(BaseModel):
@@ -118,6 +134,16 @@ class ShareOut(BaseModel):
     share_url: str
 
 
+class ShareInfo(BaseModel):
+    """Owner's view of a link. Never includes the token (it is not stored)."""
+    id: int
+    created_at: datetime
+    expires_at: datetime
+    password_protected: bool
+    expired: bool
+    locked: bool
+
+
 class SharedScanOut(BaseModel):
     """Public view of a scan. Deliberately omits owner_id and other internals."""
     title: str
@@ -139,9 +165,11 @@ class SharedScanOut(BaseModel):
 
 def _fire_notify(event: str, payload: dict) -> None:
     try:
+        headers = {"Authorization": f"Bearer {NOTIFY_API_TOKEN}"} if NOTIFY_API_TOKEN else {}
         httpx.post(
             f"{NOTIFY_SERVICE_URL}/notify",
             json={"event": event, "payload": payload},
+            headers=headers,
             timeout=5.0,
         )
     except Exception as exc:
@@ -154,10 +182,13 @@ def _fire_notify(event: str, payload: dict) -> None:
 
 @app.post("/auth/register", response_model=UserOut, status_code=201)
 def register(payload: UserRegister, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.username == payload.username).first():
-        raise HTTPException(status_code=400, detail="Username already registered")
-    if db.query(models.User).filter(models.User.email == payload.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+    # One message for both cases, so the response does not say which of the
+    # username or the email already belongs to someone.
+    taken = db.query(models.User).filter(
+        (models.User.username == payload.username) | (models.User.email == payload.email)
+    ).first()
+    if taken:
+        raise HTTPException(status_code=400, detail="Username or email already registered")
     user = models.User(
         username=payload.username,
         email=payload.email,
@@ -172,7 +203,7 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
 @app.post("/auth/login")
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == payload.username).first()
-    if not user or not verify_password(payload.password, user.hashed_password):
+    if not user or not user.is_active or not verify_password(payload.password, user.hashed_password):
         logger.warning("Failed login for username %r", payload.username)
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     token = create_access_token({"sub": user.username})
@@ -185,8 +216,8 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 
 @app.get("/scans", response_model=List[ScanOut])
 def list_scans(
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -317,19 +348,80 @@ def create_share_link(
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
 
+    # Housekeeping: expired links are already refused, so delete them.
+    db.query(models.ShareLink).filter(
+        models.ShareLink.expires_at <= datetime.utcnow()
+    ).delete(synchronize_session=False)
+
     token = generate_share_token()
     password = payload.password if payload else None
+    # Freeze what the outsider will see *now*. Later edits to the scan (for
+    # example internal remediation notes) must not leak through an old link.
+    snapshot = SharedScanOut.model_validate(scan).model_dump(mode="json")
     link = models.ShareLink(
         token_hash=hash_share_token(token),
         scan_id=scan.id,
         created_by=current_user.id,
         password_hash=get_password_hash(password) if password else None,
+        snapshot=json.dumps(snapshot),
         expires_at=datetime.utcnow() + SHARE_LINK_TTL,
     )
     db.add(link)
     db.commit()
+    db.refresh(link)
+    # Audit trail. Ids only: never the token and never the password.
+    logger.info(
+        "share_link_created link_id=%s scan_id=%s user=%s password_protected=%s expires_at=%s",
+        link.id, scan.id, current_user.username, bool(password), link.expires_at.isoformat(),
+    )
     # The raw token exists only in this response; it cannot be recovered later.
     return {"share_url": f"{SHARE_BASE_URL}/share/{token}"}
+
+
+@app.get("/scans/{scan_id}/shares", response_model=List[ShareInfo])
+def list_share_links(
+    scan_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    scan = db.query(models.ScanResult).filter(
+        models.ScanResult.id == scan_id,
+        models.ScanResult.owner_id == current_user.id,
+    ).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    now = datetime.utcnow()
+    return [
+        ShareInfo(
+            id=link.id,
+            created_at=link.created_at,
+            expires_at=link.expires_at,
+            password_protected=bool(link.password_hash),
+            expired=link.expires_at <= now,
+            locked=bool(link.password_hash) and link.failed_attempts >= MAX_FAILED_PASSWORD_ATTEMPTS,
+        )
+        for link in scan.share_links
+    ]
+
+
+@app.delete("/shares/{share_id}", status_code=204)
+def revoke_share_link(
+    share_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # Only the owner of the underlying scan can revoke; anyone else gets 404.
+    link = (
+        db.query(models.ShareLink)
+        .join(models.ScanResult, models.ScanResult.id == models.ShareLink.scan_id)
+        .filter(models.ShareLink.id == share_id, models.ScanResult.owner_id == current_user.id)
+        .first()
+    )
+    if not link:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    db.delete(link)
+    db.commit()
+    logger.info("share_link_revoked link_id=%s user=%s", share_id, current_user.username)
 
 
 @app.get("/share/{token}", response_model=SharedScanOut)
@@ -373,9 +465,11 @@ def get_shared_scan(
         ).rowcount
         db.commit()
         if reserved == 0:
+            logger.warning("share_link_locked link_id=%s", link.id)
             raise HTTPException(status_code=429, detail="Too many failed attempts for this link")
 
         if not verify_password(supplied, link.password_hash):
+            logger.warning("share_link_password_failed link_id=%s", link.id)
             raise HTTPException(status_code=401, detail="Invalid password")
 
         # Correct password: give the attempt back.
@@ -386,7 +480,10 @@ def get_shared_scan(
         )
         db.commit()
 
-    return link.scan
+    logger.info("share_link_accessed link_id=%s", link.id)
+    if link.snapshot:
+        return json.loads(link.snapshot)
+    return link.scan  # links created before snapshots existed
 
 
 # ---------------------------------------------------------------------------
