@@ -19,7 +19,7 @@ VulnTracker stores a security team's list of unfixed weaknesses in their own sys
 | Container | **Trivy** - one tool covers OS packages and language libraries in the built image, and runs in CI | See section 5 | - |
 | IaC | **Checkov** - largest Kubernetes/Dockerfile policy set, understands Helm charts | See section 5 | - |
 
-**Takeaway:** the scanners found 3 of the 14 starter-code issues below on their own. Running tools is necessary but nowhere near sufficient; most of the serious problems here only show up when you read the code with the business in mind.
+**Takeaway:** the scanners flagged only 4 of the 16 starter-code issues below on their own (F2 in part, F3, F6 and N2). Running tools is necessary but nowhere near sufficient; most of the serious problems here only show up when you read the code with the business in mind.
 
 ## 2. Findings in the starter code - Python API (`app/`)
 
