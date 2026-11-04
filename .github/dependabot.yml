@@ -3,12 +3,27 @@ updates:
   - package-ecosystem: pip
     directory: "/"
     schedule: { interval: weekly }
+    ignore:
+      # passlib 1.7.4 is incompatible with bcrypt 5; revisit when passlib is replaced.
+      - dependency-name: "bcrypt"
+        update-types: ["version-update:semver-major"]
+      # Minor/major SQLAlchemy jumps need their own tested migration.
+      - dependency-name: "sqlalchemy"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: npm
     directory: "/notify"
     schedule: { interval: weekly }
   - package-ecosystem: docker
     directory: "/"
     schedule: { interval: weekly }
+    ignore:
+      # CI and the brief fix Python at 3.11; allow patch releases only.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly }
+    ignore:
+      # Major action bumps are reviewed by hand, not auto-proposed.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

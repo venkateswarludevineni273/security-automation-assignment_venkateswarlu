@@ -28,6 +28,9 @@ notify:
   podLabels:
     app.kubernetes.io/name: vulntracker-notify
   port: 3001
+  # The notification service requires a bearer token on every call. It comes
+  # from the secrets manager and is mounted as a file, like the signing key.
+  tokenRemoteKey: vulntracker/prod/notify-api-token
 
 # Secrets come from an external secrets manager (AWS Secrets Manager, Vault,
 # GCP Secret Manager, ...) via the External Secrets Operator. Nothing secret is
@@ -53,7 +56,12 @@ ingress:
   className: nginx
   host: vulntracker.example.com
   tlsSecretName: vulntracker-tls
-  annotations: {}
+  # Rate limits and a body-size cap at the front door: slows password guessing
+  # and request floods without any code change (ingress-nginx annotations).
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
 
 # Only this namespace (the ingress controller) may reach the pod.
 networkPolicy:

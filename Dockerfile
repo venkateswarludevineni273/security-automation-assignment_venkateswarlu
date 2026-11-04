@@ -13,10 +13,17 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Install the app's dependencies, then remove the packaging tools: nothing in
+# the running container installs packages, and pip/setuptools/wheel (and the
+# libraries vendored inside them) are attack surface with known CVEs.
+RUN pip install -r requirements.txt \
+ && pip uninstall -y pip setuptools wheel
 
 # ---- runtime stage: only the venv and the app, no build tooling ------------
 FROM python:3.11.14-slim-bookworm AS runtime
+
+# Links the published image to this repository on GitHub.
+LABEL org.opencontainers.image.source="https://github.com/venkateswarludevineni273/security-automation-assignment_venkateswarlu"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -29,6 +36,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
+
+# Same reasoning for the base image's own copies of the packaging tools.
+RUN /usr/local/bin/python -m pip uninstall -y pip setuptools wheel
 
 # Unprivileged user with a fixed numeric UID/GID (Kubernetes runAsNonRoot can
 # verify a numeric ID, not a name). /data is the only writable path.

@@ -44,6 +44,8 @@ spec:
             {{- if .Values.notify.enabled }}
             - name: NOTIFY_SERVICE_URL
               value: {{ .Values.notify.url | quote }}
+            - name: NOTIFY_API_TOKEN_FILE
+              value: /var/run/secrets/vulntracker/notify-token
             {{- end }}
           readinessProbe:
             httpGet:
