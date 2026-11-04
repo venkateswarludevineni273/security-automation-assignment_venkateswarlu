@@ -223,19 +223,22 @@ Good luck. If anything in the brief is ambiguous, document your assumption and p
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | POST | `/scans/{scan_id}/share` | Bearer token (scan owner only) | Optional JSON body `{"password": "..."}` (8-72 chars). Returns `{"share_url": "..."}` |
-| GET | `/share/{token}` | None | Add `?password=...` if the link is protected |
+| GET | `/share/{token}` | None | If the link is protected, send the password in the `X-Share-Password` header (preferred) or as `?password=...` |
+| GET | `/scans/{scan_id}/shares` | Bearer token (owner only) | Lists the scan's links: id, created, expires, password-protected, expired, locked. Never returns a token. |
+| DELETE | `/shares/{share_id}` | Bearer token (owner only) | Revokes a link immediately |
 
 **`share_url` base:** built from the `SHARE_BASE_URL` environment variable, defaulting to `http://localhost:8000`. It is deliberately *not* taken from the request's `Host` header, because that header is client-controlled (host-header injection).
 
 **Security properties**
 - Token: 256 bits from `secrets.token_urlsafe(32)`; only its SHA-256 digest is stored, so a database leak does not leak usable links.
-- Password: optional, stored as a bcrypt hash. After 5 wrong attempts the link is locked.
-- Expiry: 24 hours, enforced server-side. Unknown and expired tokens return the same 404.
-- Authorisation: only the scan's owner can create a link; non-owners get the same 404 as a missing scan.
-- Public response omits `owner_id` and the internal `id`, and sends `Cache-Control: no-store`.
+- Password: optional, stored as a bcrypt hash. Each attempt is reserved with one atomic database update, so parallel requests cannot exceed 5 guesses; after 5 wrong attempts the link is locked. The owner can see `locked` and revoke the link.
+- Expiry: 24 hours, enforced server-side. Unknown, expired and revoked tokens return the same 404. Expired links are purged the next time a link is created.
+- Authorisation: only the scan's owner can create, list or revoke links; non-owners get the same 404 as a missing record.
+- The public response is a **snapshot** taken when the link was created, so later edits to the scan (for example internal notes) never reach the viewer. It omits `owner_id` and the internal `id`, and sends `Cache-Control: no-store`.
 - Deleting a scan deletes its links.
+- Audit log: link creation, access, failed password, lock and revoke are logged with ids only. The access log redacts `/share/<token>` and `?password=`.
 
-**Known limitations (prototype):** the password travels in a query string, so it can appear in access logs and browser history (the brief specifies this); there is no per-IP rate limiting; expired rows are not purged; links cannot be listed or revoked individually.
+**Known limitations (prototype):** the `?password=` query string is still accepted because the assignment specifies it, so proxy or ingress logs outside this service may record it; someone holding a link can still use up its 5 attempts (the owner can then revoke it and issue a new one); there is no per-IP throttling; the audit trail is ordinary log lines, not a tamper-evident store. Databases created before the `snapshot` column existed need that column added, or to be recreated (`create_all` does not alter existing tables). Details: `docs/remediation-plan.md` (R5, R8, R9).
 
 ---
 
@@ -250,6 +253,7 @@ No secrets live in the repository. The API **refuses to start** without a signin
 | `SHARE_BASE_URL` | no | `http://localhost:8000` | Base URL used to build share links |
 | `CORS_ALLOWED_ORIGINS` | no | *(none)* | Comma-separated browser origins allowed to call the API |
 | `NOTIFY_SERVICE_URL` | no | `http://localhost:3001` | Notification service |
+| `NOTIFY_API_TOKEN` or `NOTIFY_API_TOKEN_FILE` | no | *(none)* | Bearer token the notification service requires on every call. Without it the API sends no `Authorization` header and the notification service refuses the call (the API logs a warning and carries on). |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | no | `30` | Login token lifetime |
 
 Local development and tests (tests set their own throwaway key):
